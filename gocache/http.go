@@ -40,6 +40,7 @@ func (p *HTTPPool) Log(format string, v ...interface{}) {
 }
 
 // ServeHTTP handle all http requests
+// 实现Handler接口
 func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
@@ -72,6 +73,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(view.ByteSlice())
 }
 
+// http客户端
 type httpGetter struct {
 	baseURL string
 }
@@ -116,7 +118,7 @@ func (p *HTTPPool) Set(peers ...string) {
 	}
 }
 
-// PickPeer picks a peer according to key
+// PickPeer picks a peer according to key (a HTTPPool is a PeerPicker)
 func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -2,6 +2,7 @@ package gocache
 
 import (
 	"fmt"
+	"gocache/singleflight"
 	"log"
 	"sync"
 )
@@ -13,6 +14,9 @@ type Group struct {
 	getter    Getter
 	mainCache cache
 	peers     PeerPicker
+	// use singleflight.Group to make sure that
+	// each key is only fetched once （防止缓存击穿）
+	loader *singleflight.Group
 }
 
 // A Getter loads data for a key
@@ -45,6 +49,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		getter:    getter,
 		mainCache: cache{cacheBytes: cacheBytes},
+		loader:    &singleflight.Group{},
 	}
 
 	// stroes the new group in groups with a given name
@@ -75,19 +80,30 @@ func (g *Group) Get(key string) (ByteView, error) {
 
 	// returns callback function when the key is missed
 	log.Println("[GoCache] missed key", key)
-	return g.load(key)
+	return g.Add(key)
 }
 
-func (g *Group) load(key string) (value ByteView, err error) {
-	if g.peers != nil {
-		if peer, ok := g.peers.PickPeer(key); ok {
-			if value, err = g.getFromPeer(peer, key); err == nil {
-				return value, nil
+// Add adds a key-value pair to the cache
+func (g *Group) Add(key string) (value ByteView, err error) {
+	// each key is only fetched once (either locally or remotely)
+	// regardless of the number of concurrent callers.
+	viewi, err := g.loader.Do(key, func() (interface{}, error) {
+		if g.peers != nil {
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if value, err = g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[GoCache] Failed to get from peer", err)
 			}
-			log.Println("[GeeCache] Failed to get from peer", err)
 		}
+
+		return g.getLocally(key)
+	})
+
+	if err == nil {
+		return viewi.(ByteView), nil
 	}
-	return g.getLocally(key)
+	return
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
@@ -106,6 +122,8 @@ func (g *Group) getLocally(key string) (ByteView, error) {
 
 	}
 	value := ByteView{b: cloneBytes(bytes)}
+
+	// 将远程数据添加到当前缓存
 	g.populateCache(key, value)
 	return value, nil
 }
